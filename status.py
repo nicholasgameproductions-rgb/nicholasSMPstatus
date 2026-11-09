@@ -109,7 +109,7 @@ def make_embed():
         print("API ERROR:", type(error).__name__, str(error))
 
     return {
-        "title": "✦ NICHOLASSMP OFFICIAL ✦",
+        "title": "✦ NICHOLASSMPOFFICIAL ✦",
         "description": f"**{status}**\nSurvival • Season 2",
         "color": color,
         "fields": [
@@ -120,7 +120,7 @@ def make_embed():
             {"name": "📜 Server MOTD", "value": motd, "inline": False}
         ],
         "footer": {
-            "text": "NicholasSMP • Automatically updated with GitHub Actions"
+            "text": "NicholasSMP • Automatically updated!"
         },
         "timestamp": now
     }
