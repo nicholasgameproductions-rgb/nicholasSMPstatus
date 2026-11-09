@@ -3,25 +3,26 @@ name: NicholasSMP Discord Status
 on:
   workflow_dispatch:
   schedule:
-    - cron: "2/5 * * * *"
+    - cron: '3/5 * * * *'
 
 permissions:
   contents: read
 
+concurrency:
+  group: nicholassmp-status
+  cancel-in-progress: false
+
 jobs:
   update:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v4
-
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
-
-      - name: Update Discord embed
+          python-version: '3.12'
+      - name: Refresh Discord status
         env:
           DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
           DISCORD_MESSAGE_ID: ${{ secrets.DISCORD_MESSAGE_ID }}
