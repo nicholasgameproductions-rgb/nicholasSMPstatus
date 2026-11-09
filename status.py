@@ -1,96 +1,161 @@
-"""NicholasSMP live Discord status — GitHub Actions / Python standard library only."""
-import json
 import os
+import json
 import re
-import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-API_URL = 'https://topeaglerservers.com/api/status/nicholasgp.eagler.host'
-SERVER_ADDRESS = 'nicholasgp.eagler.host'
-WEBHOOK = os.environ['DISCORD_WEBHOOK_URL'].strip().rstrip('/')
-MESSAGE_ID = os.environ.get('DISCORD_MESSAGE_ID', '').strip()
+API = "https://topeaglerservers.com/api/status/nicholasgp.eagler.host"
+WEBHOOK = os.environ["DISCORD_WEBHOOK_URL"].strip().rstrip("/")
+MESSAGE_ID = os.getenv("DISCORD_MESSAGE_ID", "").strip()
+SERVER = "nicholasgp.eagler.host"
 
 
-def fetch_json(url):
-    request = urllib.request.Request(url, headers={
-        'User-Agent': 'Mozilla/5.0 (NicholasSMP-Status/3.0)',
-        'Accept': 'application/json',
-    })
-    with urllib.request.urlopen(request, timeout=25) as response:
-        return json.load(response)
-
-
-def normalized_key(key):
-    return re.sub(r'[^a-z0-9]', '', str(key).lower())
-
-
-def get_key(obj, *candidates):
-    if not isinstance(obj, dict):
+def get_value(data, *keys):
+    if not isinstance(data, dict):
         return None
-    lookup = {normalized_key(k): v for k, v in obj.items()}
-    for name in candidates:
-        v = lookup.get(normalized_key(name))
-        if v is not None:
-            return v
+    for key in keys:
+        if key in data and data[key] is not None:
+            return data[key]
     return None
 
 
-def deep_get(obj, *candidates):
-    """Find a matching key anywhere within nested public status data."""
-    queue = [obj]
-    visited = 0
-    while queue and visited < 100:
-        current = queue.pop(0)
-        visited += 1
-        if isinstance(current, dict):
-            value = get_key(current, *candidates)
-            if value is not None:
-                return value
-            queue.extend(x for x in current.values() if isinstance(x, (dict, list)))
-        elif isinstance(current, list):
-            queue.extend(x for x in current if isinstance(x, (dict, list)))
-    return None
-
-
-def to_bool(value):
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)) and value in (0, 1):
-        return bool(value)
+def text(value, default="Unknown"):
+    if value is None:
+        return default
     if isinstance(value, dict):
-        return to_bool(get_key(value, 'online', 'isOnline', 'status', 'state', 'reachable'))
-    if isinstance(value, str):
-        s = value.strip().lower()
-        if s in ('online', 'up', 'true', 'yes', 'reachable', 'running', '1'):
-            return True
-        if s in ('offline', 'down', 'false', 'no', 'unreachable', 'stopped', '0'):
-            return False
-    return None
+        return text(get_value(value, "clean", "text", "plain", "version", "name"), default)
+    if isinstance(value, list):
+        return " | ".join(text(item, "") for item in value)[:900] or default
+    result = re.sub(r"(?i)§[0-9a-fk-or]", "", str(value))
+    return result.replace("@", "@\u200b")[:900] or default
 
 
-def as_text(v, fallback='Unknown'):
-    if v is None:
-        return fallback
-    if isinstance(v, dict):
-        value = get_key(v, 'clean', 'text', 'plain', 'raw', 'value', 'name', 'description', 'version')
-        return as_text(value, fallback)
-    if isinstance(v, list):
-        return ' | '.join(as_text(x, '') for x in v)[:950] or fallback
-    # strip Minecraft legacy formatting; prevent Discord mentions
-    text = re.sub(r'(?i)\u00a7[0-9a-fk-or]', '', str(v))
-    return text.replace('@', '@\u200b').strip()[:950] or fallback
+def request_json(url, method="GET", payload=None):
+    body = json.dumps(payload).encode() if payload is not None else None
+    req = urllib.request.Request(
+        url,
+        data=body,
+        method=method,
+        headers={
+            "User-Agent": "NicholasSMP-Status/4.0",
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+    )
+    with urllib.request.urlopen(req, timeout=25) as response:
+        content = response.read()
+        return json.loads(content) if content else {}
 
 
-def get_stats(document):
-    # API response known to contain success, timestamp and server.
-    server = get_key(document, 'server')
-    if isinstance(server, dict):
-        root = server
+def make_embed():
+    now = datetime.now(timezone.utc).isoformat()
+
+    status = "🟡 STATUS UNAVAILABLE"
+    color = 0xFEE75C
+    players = "Unknown"
+    version = "Unknown"
+    ping = "Unknown"
+    motd = "Unknown"
+
+    try:
+        data = request_json(API)
+        print("API keys:", list(data.keys()))
+
+        server = data.get("server", {})
+        if not isinstance(server, dict):
+            server = {}
+
+        print("Server keys:", list(server.keys()))
+
+        online = get_value(server, "online", "isOnline", "is_online")
+        if online is None:
+            online = get_value(server, "status", "state")
+
+        if isinstance(online, str):
+            online = online.lower() in ("online", "true", "up", "running")
+
+        if online is True:
+            status = "🟢 ONLINE"
+            color = 0x57F287
+        elif online is False:
+            status = "🔴 OFFLINE"
+            color = 0xED4245
+
+        player_data = get_value(server, "players", "playerData")
+        if isinstance(player_data, dict):
+            count = get_value(player_data, "online", "current", "count")
+            maximum = get_value(player_data, "max", "maximum", "limit")
+        else:
+            count = get_value(server, "playersOnline", "onlinePlayers", "playerCount")
+            maximum = get_value(server, "maxPlayers", "playersMax")
+
+        if count is not None:
+            players = f"{text(count)} / {text(maximum, '?')}"
+
+        version = text(get_value(server, "version", "minecraftVersion", "serverVersion"))
+
+        ping_value = get_value(server, "ping", "latency", "responseTime")
+        if ping_value is not None:
+            ping = text(ping_value)
+            if isinstance(ping_value, (int, float)):
+                ping += " ms"
+
+        motd = text(get_value(server, "motd", "description", "serverMotd"))
+
+        print("Parsed status:", status)
+        print("Parsed players:", players)
+
+    except Exception as error:
+        print("API ERROR:", type(error).__name__, str(error))
+
+    return {
+        "title": "✦ NICHOLASSMP OFFICIAL ✦",
+        "description": f"**{status}**\nSurvival • Season 2",
+        "color": color,
+        "fields": [
+            {"name": "👥 Players", "value": players, "inline": True},
+            {"name": "🎮 Version", "value": version, "inline": True},
+            {"name": "📡 Ping", "value": ping, "inline": True},
+            {"name": "🌐 Server IP", "value": f"`{SERVER}`", "inline": False},
+            {"name": "📜 Server MOTD", "value": motd, "inline": False}
+        ],
+        "footer": {
+            "text": "NicholasSMP • Automatically updated with GitHub Actions"
+        },
+        "timestamp": now
+    }
+
+
+def main():
+    print("Starting NicholasSMP status updater...", flush=True)
+
+    payload = {
+        "embeds": [make_embed()],
+        "allowed_mentions": {"parse": []}
+    }
+
+    if MESSAGE_ID:
+        print("Updating message:", MESSAGE_ID, flush=True)
+        request_json(
+            f"{WEBHOOK}/messages/{MESSAGE_ID}",
+            method="PATCH",
+            payload=payload
+        )
+        print("SUCCESS: Existing Discord message updated!", flush=True)
     else:
-        root = get_key(document, 'data') or document
+        print("Creating new Discord message...", flush=True)
+        payload["username"] = "NicholasSMP Status"
 
-    # Never interpret top-level `success` as proof that the Minecraft server is online.
-    status = deep_get(root, 'online', 'isOnline', 'is_online', 'serverOnline',
-                      'status', 'state', 'reachable', 'isReachable')
-    online = to_bool(status)
+        result = request_json(
+            WEBHOOK + "?wait=true",
+            method="POST",
+            payload=payload
+        )
+
+        print("SUCCESS: Discord message created!", flush=True)
+        print("FIRST RUN MESSAGE ID:", result.get("id"), flush=True)
+        print("Save this ID as DISCORD_MESSAGE_ID in GitHub Secrets.", flush=True)
+
+
+if __name__ == "__main__":
+    main()
