@@ -1,105 +1,96 @@
+"""NicholasSMP live Discord status — GitHub Actions / Python standard library only."""
 import json
 import os
+import re
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
-API = "https://topeaglerservers.com/api/status/nicholasgp.eagler.host"
-HOOK = os.environ["DISCORD_WEBHOOK_URL"].strip().rstrip("/")
-MESSAGE_ID = os.environ.get("DISCORD_MESSAGE_ID", "").strip()
+API_URL = 'https://topeaglerservers.com/api/status/nicholasgp.eagler.host'
+SERVER_ADDRESS = 'nicholasgp.eagler.host'
+WEBHOOK = os.environ['DISCORD_WEBHOOK_URL'].strip().rstrip('/')
+MESSAGE_ID = os.environ.get('DISCORD_MESSAGE_ID', '').strip()
 
 
-def fetch():
-    req = urllib.request.Request(API, headers={"User-Agent": "NicholasSMP-Discord-Status/1.0", "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        data = json.load(resp)
-    if not isinstance(data, dict):
-        raise ValueError("Unexpected API response (not a JSON object)")
-    print("API keys:", ", ".join(data.keys()))
-    return data
+def fetch_json(url):
+    request = urllib.request.Request(url, headers={
+        'User-Agent': 'Mozilla/5.0 (NicholasSMP-Status/3.0)',
+        'Accept': 'application/json',
+    })
+    with urllib.request.urlopen(request, timeout=25) as response:
+        return json.load(response)
 
 
-def pick(data, *keys):
-    for key in keys:
-        if key in data and data[key] is not None:
-            return data[key]
+def normalized_key(key):
+    return re.sub(r'[^a-z0-9]', '', str(key).lower())
+
+
+def get_key(obj, *candidates):
+    if not isinstance(obj, dict):
+        return None
+    lookup = {normalized_key(k): v for k, v in obj.items()}
+    for name in candidates:
+        v = lookup.get(normalized_key(name))
+        if v is not None:
+            return v
     return None
 
 
-def flatten(value):
+def deep_get(obj, *candidates):
+    """Find a matching key anywhere within nested public status data."""
+    queue = [obj]
+    visited = 0
+    while queue and visited < 100:
+        current = queue.pop(0)
+        visited += 1
+        if isinstance(current, dict):
+            value = get_key(current, *candidates)
+            if value is not None:
+                return value
+            queue.extend(x for x in current.values() if isinstance(x, (dict, list)))
+        elif isinstance(current, list):
+            queue.extend(x for x in current if isinstance(x, (dict, list)))
+    return None
+
+
+def to_bool(value):
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)) and value in (0, 1):
+        return bool(value)
     if isinstance(value, dict):
-        return flatten(pick(value, "clean", "text", "raw", "description", "motd"))
-    if isinstance(value, list):
-        return " | ".join(map(str, value))
-    return str(value) if value is not None else "Unknown"
+        return to_bool(get_key(value, 'online', 'isOnline', 'status', 'state', 'reachable'))
+    if isinstance(value, str):
+        s = value.strip().lower()
+        if s in ('online', 'up', 'true', 'yes', 'reachable', 'running', '1'):
+            return True
+        if s in ('offline', 'down', 'false', 'no', 'unreachable', 'stopped', '0'):
+            return False
+    return None
 
 
-def build_embed():
-    checked = datetime.now(timezone.utc).isoformat()
-    try:
-        data = fetch()
-        # API providers use slightly different response wrappers.
-        core = data.get("data", data)
-        if not isinstance(core, dict):
-            core = data
-        explicit_online = pick(core, "online", "is_online", "isOnline")
-        status = pick(core, "status", "state")
-        if isinstance(explicit_online, bool):
-            online = explicit_online
-        elif isinstance(status, str):
-            online = status.lower() in ("online", "up")
-        else:
-            online = None
-        players = pick(core, "players", "playerCount", "player_count")
-        if isinstance(players, dict):
-            current = pick(players, "online", "current", "count")
-            maximum = pick(players, "max", "maximum", "limit")
-        else:
-            current = players
-            maximum = pick(core, "maxPlayers", "max_players", "max")
-        version = flatten(pick(core, "version", "serverVersion", "minecraft_version"))
-        ping = pick(core, "latency", "ping", "responseTime", "response_time")
-        motd = flatten(pick(core, "motd", "description", "message"))
-        # If the API lacks an explicit online field, don't silently label it Online.
-        if online is None:
-            label, color = "🟡 STATUS UNKNOWN", 0xF1C40F
-        else:
-            label, color = ("🟢 ONLINE", 0x57F287) if online else ("🔴 OFFLINE", 0xED4245)
-        player_text = f"{current if current is not None else '?'} / {maximum if maximum is not None else '?'}" if online is not False else "Offline"
-        ping_text = f"{ping} ms" if isinstance(ping, (int, float)) else flatten(ping)
-        fields = [
-            {"name": "👥 Players", "value": str(player_text)[:1024], "inline": True},
-            {"name": "🎮 Version", "value": version[:1024], "inline": True},
-            {"name": "📡 Ping", "value": ping_text[:1024], "inline": True},
-            {"name": "🌐 Server Address", "value": "`nicholasgp.eagler.host`", "inline": False},
-            {"name": "📜 MOTD", "value": (motd or "Unknown")[:1024], "inline": False},
-        ]
-        description = f"**{label}**\nSurvival • NicholasSMPOfficial"
-    except Exception as exc:
-        print(f"Could not retrieve server status: {type(exc).__name__}: {exc}")
-        color = 0xFEE75C
-        description = "🟡 **STATUS UNAVAILABLE**\nMonitoring API could not be reached. This does *not* necessarily mean the server is offline."
-        fields = [{"name": "🌐 Server Address", "value": "`nicholasgp.eagler.host`", "inline": False}]
-    return {"title": "✦ NICHOLASSMP OFFICIAL ✦", "description": description,
-            "color": color, "fields": fields,
-            "footer": {"text": "NicholasSMP • Auto-updates approximately every 5 minutes"}, "timestamp": checked}
+def as_text(v, fallback='Unknown'):
+    if v is None:
+        return fallback
+    if isinstance(v, dict):
+        value = get_key(v, 'clean', 'text', 'plain', 'raw', 'value', 'name', 'description', 'version')
+        return as_text(value, fallback)
+    if isinstance(v, list):
+        return ' | '.join(as_text(x, '') for x in v)[:950] or fallback
+    # strip Minecraft legacy formatting; prevent Discord mentions
+    text = re.sub(r'(?i)\u00a7[0-9a-fk-or]', '', str(v))
+    return text.replace('@', '@\u200b').strip()[:950] or fallback
 
 
-def send(method, url, payload):
-    req = urllib.request.Request(url, data=json.dumps(payload).encode(),
-                                 headers={"Content-Type": "application/json", "User-Agent": "NicholasSMPStatus/1.0"}, method=method)
-    with urllib.request.urlopen(req, timeout=20) as resp:
-        result = resp.read().decode()
-    return json.loads(result) if result else {}
-
-
-if __name__ == "__main__":
-    payload = {"embeds": [build_embed()], "allowed_mentions": {"parse": []}}
-    if MESSAGE_ID:
-        url = f"{HOOK}/messages/{MESSAGE_ID}"
-        result = send("PATCH", url, payload)
-        print("Updated existing status message:", result.get("id", MESSAGE_ID))
+def get_stats(document):
+    # API response known to contain success, timestamp and server.
+    server = get_key(document, 'server')
+    if isinstance(server, dict):
+        root = server
     else:
-        result = send("POST", f"{HOOK}?wait=true", {**payload, "username": "NicholasSMP Status"})
-        print("FIRST RUN: message created successfully. MESSAGE ID:", result.get("id"))
-        print("Set repository secret DISCORD_MESSAGE_ID to this ID BEFORE running again to avoid duplicate messages.")
+        root = get_key(document, 'data') or document
+
+    # Never interpret top-level `success` as proof that the Minecraft server is online.
+    status = deep_get(root, 'online', 'isOnline', 'is_online', 'serverOnline',
+                      'status', 'state', 'reachable', 'isReachable')
+    online = to_bool(status)
