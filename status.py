@@ -95,7 +95,7 @@ def make_embed():
             {"name": "🌐 Server Address", "value": f"`{SERVER}`", "inline": False},
             {"name": "📜 MOTD", "value": motd, "inline": False},
         ],
-        "footer": {"text": "NicholasSMP • GitHub Actions status monitor"},
+        "footer": {"text": "NicholasSMP • nicholasgpSMPofficial-Auto Upd"},
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
 
