@@ -353,8 +353,8 @@ def make_embed():
 
         "footer": {
             "text": (
-                "NicholasSMP • Live Server Monitor "
-                "• Auto Updated"
+                "NicholasSMP • Server Monitor "
+                "• Updated every day"
             )
         },
 
