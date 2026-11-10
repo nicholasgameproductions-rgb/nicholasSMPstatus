@@ -3,8 +3,7 @@ name: NicholasSMP Discord Status
 on:
   workflow_dispatch:
   schedule:
-    - cron: '3/5 * * * *'
-
+    - cron: '*/5 * * * *'
 permissions:
   contents: read
 
